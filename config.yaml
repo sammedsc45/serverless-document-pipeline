@@ -1,6 +1,5 @@
 # config.yaml
 # Environment-specific configuration for the document processing pipeline.
-# Replace <UNIQUE_SUFFIX> with a random string of numbers and letters.
 
 # S3 Bucket Names (must be globally unique)
 IncomingBucketName: "doc-pipeline-incoming-uniquea1b2c3d4"

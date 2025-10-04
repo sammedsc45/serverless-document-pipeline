@@ -3,35 +3,48 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   A robust, decoupled document processing pipeline with separate notification channels.
+  
+  Architecture components:
+  - S3 buckets for document storage (incoming and processed)
+  - DynamoDB table for metadata tracking with stream enabled
+  - SNS topics for internal and external notifications
+  - Lambda functions for document processing stages
 
+# Input parameters for resource naming
 Parameters:
   IncomingBucketName: {Type: String}
   ProcessedBucketName: {Type: String}
   MetadataTableName: {Type: String}
 
 Resources:
+  # Storage Resources
   IncomingBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Ref IncomingBucketName
+      # Secure bucket configuration blocking all public access
       PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+  
   ProcessedBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Ref ProcessedBucketName
+      # Secure bucket configuration blocking all public access
       PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
   
-  InternalOcrCompleteTopic: # <-- Topic for Lambda-to-Lambda communication
+  # SNS Topics for decoupled communication
+  InternalOcrCompleteTopic: # Internal communication between Lambda functions
     Type: AWS::SNS::Topic
     Properties:
       TopicName: InternalOcrCompleteTopic
       
-  UserNotificationTopic: # <-- Topic for user-facing notifications
+  UserNotificationTopic: # External notifications to end users
     Type: AWS::SNS::Topic
     Properties:
       DisplayName: DocumentProcessingNotifications
       TopicName: UserNotificationTopic
 
+  # DynamoDB Table for document metadata
   DocumentMetadataTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -44,6 +57,7 @@ Resources:
       KeySchema:
         - {AttributeName: DocumentId, KeyType: HASH}
       ProvisionedThroughput: {ReadCapacityUnits: 1, WriteCapacityUnits: 1}
+      # GSI for querying documents by type and creation date
       GlobalSecondaryIndexes:
         - IndexName: DocumentTypeIndex
           KeySchema:
@@ -52,6 +66,7 @@ Resources:
           Projection: {ProjectionType: ALL}
           ProvisionedThroughput: {ReadCapacityUnits: 1, WriteCapacityUnits: 1}
 
+  # Lambda Functions for Processing Pipeline
   DocumentIntakeFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -61,6 +76,7 @@ Resources:
       Runtime: python3.11
       Architectures: [arm64]
       Environment: {Variables: {METADATA_TABLE: !Ref DocumentMetadataTable}}
+      # Trigger on S3 uploads
       Events:
         S3PutEvent: {Type: S3, Properties: {Bucket: !Ref IncomingBucket, Events: s3:ObjectCreated:*}}
       Policies:
@@ -81,16 +97,18 @@ Resources:
         Variables:
           METADATA_TABLE: !Ref DocumentMetadataTable
           PROCESSED_BUCKET: !Ref ProcessedBucket
-          INTERNAL_TOPIC_ARN: !Ref InternalOcrCompleteTopic # <-- Publishes to INTERNAL topic
+          INTERNAL_TOPIC_ARN: !Ref InternalOcrCompleteTopic
+      # Trigger on DynamoDB stream events
       Events:
         DynamoDBStreamEvent:
           Type: DynamoDB
           Properties: {Stream: !GetAtt DocumentMetadataTable.StreamArn, StartingPosition: LATEST, BatchSize: 5}
+      # Required IAM permissions
       Policies:
         - S3ReadPolicy: {BucketName: !Ref IncomingBucketName}
         - S3WritePolicy: {BucketName: !Ref ProcessedBucketName}
         - DynamoDBWritePolicy: {TableName: !Ref MetadataTableName}
-        - SNSPublishMessagePolicy: {TopicName: !GetAtt InternalOcrCompleteTopic.TopicName} # <-- Policy for INTERNAL topic
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt InternalOcrCompleteTopic.TopicName}
         - Statement:
             - Effect: Allow
               Action: [textract:DetectDocumentText]
@@ -112,17 +130,19 @@ Resources:
         Variables:
           METADATA_TABLE: !Ref DocumentMetadataTable
           PROCESSED_BUCKET: !Ref ProcessedBucket
-          USER_NOTIFICATION_TOPIC_ARN: !Ref UserNotificationTopic # <-- Publishes to USER topic
+          USER_NOTIFICATION_TOPIC_ARN: !Ref UserNotificationTopic
+      # Trigger on internal SNS topic messages
       Events:
         SNSEvent:
           Type: SNS
           Properties:
-            Topic: !Ref InternalOcrCompleteTopic # <-- Subscribed to INTERNAL topic
+            Topic: !Ref InternalOcrCompleteTopic
       Policies:
         - S3ReadPolicy: {BucketName: !Ref ProcessedBucketName}
         - DynamoDBWritePolicy: {TableName: !Ref MetadataTableName}
-        - SNSPublishMessagePolicy: {TopicName: !GetAtt UserNotificationTopic.TopicName} # <-- Policy for USER topic
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt UserNotificationTopic.TopicName}
 
+# Stack Outputs
 Outputs:
   IncomingBucket: {Description: "Name of the S3 bucket for incoming documents", Value: !Ref IncomingBucket}
   ProcessedBucket: {Description: "Name of the S3 bucket for processed text files", Value: !Ref ProcessedBucket}
