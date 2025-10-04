@@ -1,1 +1,0 @@
-This test will be processed by the OCR Lambda.
