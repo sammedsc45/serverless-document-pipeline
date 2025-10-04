@@ -1,0 +1,11 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "doc-processing-pipeline-stack"
+resolve_s3 = true
+s3_prefix = "doc-processing-pipeline-stack"
+region = "ap-south-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "IncomingBucketName=\"doc-pipeline-incoming-uniquea1b2c3d4\" ProcessedBucketName=\"doc-pipeline-processed-a1b2c3d4unique\" MetadataTableName=\"DocumentMetadataTable\""
+image_repositories = []

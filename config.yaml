@@ -1,0 +1,13 @@
+# config.yaml
+# Environment-specific configuration for the document processing pipeline.
+# Replace <UNIQUE_SUFFIX> with a random string of numbers and letters.
+
+# S3 Bucket Names (must be globally unique)
+IncomingBucketName: "doc-pipeline-incoming-uniquea1b2c3d4"
+ProcessedBucketName: "doc-pipeline-processed-a1b2c3d4unique"
+
+# DynamoDB Table Name
+MetadataTableName: "DocumentMetadataTable"
+
+# IAM Role Name
+DocumentIntakeLambdaRoleName: "DocumentIntakeLambdaRole"

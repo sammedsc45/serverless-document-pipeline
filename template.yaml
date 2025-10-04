@@ -1,0 +1,129 @@
+# template.yaml (Final Architecture with Two SNS Topics)
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  A robust, decoupled document processing pipeline with separate notification channels.
+
+Parameters:
+  IncomingBucketName: {Type: String}
+  ProcessedBucketName: {Type: String}
+  MetadataTableName: {Type: String}
+
+Resources:
+  IncomingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref IncomingBucketName
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+  ProcessedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ProcessedBucketName
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+  
+  InternalOcrCompleteTopic: # <-- Topic for Lambda-to-Lambda communication
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: InternalOcrCompleteTopic
+      
+  UserNotificationTopic: # <-- Topic for user-facing notifications
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: DocumentProcessingNotifications
+      TopicName: UserNotificationTopic
+
+  DocumentMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref MetadataTableName
+      StreamSpecification: {StreamViewType: NEW_IMAGE}
+      AttributeDefinitions:
+        - {AttributeName: DocumentId, AttributeType: S}
+        - {AttributeName: DocumentType, AttributeType: S}
+        - {AttributeName: CreatedAt, AttributeType: S}
+      KeySchema:
+        - {AttributeName: DocumentId, KeyType: HASH}
+      ProvisionedThroughput: {ReadCapacityUnits: 1, WriteCapacityUnits: 1}
+      GlobalSecondaryIndexes:
+        - IndexName: DocumentTypeIndex
+          KeySchema:
+            - {AttributeName: DocumentType, KeyType: HASH}
+            - {AttributeName: CreatedAt, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
+          ProvisionedThroughput: {ReadCapacityUnits: 1, WriteCapacityUnits: 1}
+
+  DocumentIntakeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DocumentIntakeLambda
+      CodeUri: src/handlers/
+      Handler: document_intake.lambda_handler
+      Runtime: python3.11
+      Architectures: [arm64]
+      Environment: {Variables: {METADATA_TABLE: !Ref DocumentMetadataTable}}
+      Events:
+        S3PutEvent: {Type: S3, Properties: {Bucket: !Ref IncomingBucket, Events: s3:ObjectCreated:*}}
+      Policies:
+        - S3ReadPolicy: {BucketName: !Ref IncomingBucketName}
+        - DynamoDBWritePolicy: {TableName: !Ref MetadataTableName}
+
+  OCRProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: OCRProcessorLambda
+      CodeUri: src/handlers/
+      Handler: ocr_processor.lambda_handler
+      Runtime: python3.11
+      Architectures: [arm64]
+      MemorySize: 1024
+      Timeout: 60
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref DocumentMetadataTable
+          PROCESSED_BUCKET: !Ref ProcessedBucket
+          INTERNAL_TOPIC_ARN: !Ref InternalOcrCompleteTopic # <-- Publishes to INTERNAL topic
+      Events:
+        DynamoDBStreamEvent:
+          Type: DynamoDB
+          Properties: {Stream: !GetAtt DocumentMetadataTable.StreamArn, StartingPosition: LATEST, BatchSize: 5}
+      Policies:
+        - S3ReadPolicy: {BucketName: !Ref IncomingBucketName}
+        - S3WritePolicy: {BucketName: !Ref ProcessedBucketName}
+        - DynamoDBWritePolicy: {TableName: !Ref MetadataTableName}
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt InternalOcrCompleteTopic.TopicName} # <-- Policy for INTERNAL topic
+        - Statement:
+            - Effect: Allow
+              Action: [textract:DetectDocumentText]
+              Resource: "*"
+            - Effect: Allow
+              Action: [dynamodb:DescribeStream, dynamodb:GetRecords, dynamodb:GetShardIterator, dynamodb:ListStreams]
+              Resource: !GetAtt DocumentMetadataTable.StreamArn
+
+  ClassifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ClassifierLambda
+      CodeUri: src/handlers/
+      Handler: classifier.lambda_handler
+      Runtime: python3.11
+      Architectures: [arm64]
+      Timeout: 30
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref DocumentMetadataTable
+          PROCESSED_BUCKET: !Ref ProcessedBucket
+          USER_NOTIFICATION_TOPIC_ARN: !Ref UserNotificationTopic # <-- Publishes to USER topic
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref InternalOcrCompleteTopic # <-- Subscribed to INTERNAL topic
+      Policies:
+        - S3ReadPolicy: {BucketName: !Ref ProcessedBucketName}
+        - DynamoDBWritePolicy: {TableName: !Ref MetadataTableName}
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt UserNotificationTopic.TopicName} # <-- Policy for USER topic
+
+Outputs:
+  IncomingBucket: {Description: "Name of the S3 bucket for incoming documents", Value: !Ref IncomingBucket}
+  ProcessedBucket: {Description: "Name of the S3 bucket for processed text files", Value: !Ref ProcessedBucket}
+  DocumentMetadataTableName: {Description: "Name of the DynamoDB table for metadata", Value: !Ref DocumentMetadataTable}
