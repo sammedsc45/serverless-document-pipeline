@@ -108,8 +108,8 @@ flowchart TD
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/your-repo-name.git
-    cd your-repo-name
+    git clone https://github.com/sammedsc45/serverless-document-pipeline.git
+    cd serverless-document-pipeline
     ```
 
 2.  **Run the guided deployment:**
